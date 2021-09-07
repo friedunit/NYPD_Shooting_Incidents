@@ -1,0 +1,249 @@
+---
+title: "NYPD Shooting Project"
+author: "J. Kaiser"
+date: "8/24/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, echo=TRUE}
+library(tidyverse)
+library(lubridate)
+```
+
+
+<center><h2> Source data </h2></center>
+
+```{r raw_data, message=FALSE}
+url = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+raw_data = read_csv(url)
+
+```
+
+
+<center><h2> Initial Summary of the raw data </h2></center>
+
+```{r raw_data Summary}
+summary(raw_data)
+
+```
+
+```{r}
+# remove some unnecessary fields, we don't need these for our current analysis
+df = raw_data %>%
+  select(-JURISDICTION_CODE, -(X_COORD_CD:Lon_Lat)) %>%
+  # Convert OCCUR_DATE to date type
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+```
+
+<center><h2> Count of Perpetrators by Sex </h2></center>
+
+```{r count_perp_sex}
+table(df$PERP_SEX)
+```
+#### In this table we can quickly see the number of perpetrators grouped by sex, with males being the vast majority.  
+
+#### We saw in the summary above under the Statistical Murder Flag field, that 19,080 did not result in murder and 4,488 did result in murder. The field had no missing data so all 23,568 observations were accounted for. We can see below the percentages of the resulting analysis, roughly 19% resulted in murder while 81% did not:  
+
+```{r}
+print(paste("Percentage Resulting in Murder: ", sum(df$STATISTICAL_MURDER_FLAG == TRUE)/nrow(df)))
+print(paste("Percentage Where Victim Lived: ", sum(df$STATISTICAL_MURDER_FLAG == FALSE)/nrow(df)))
+```
+
+
+<center><h2> Count of Incidents by Boro </h2></center>
+```{r}
+ggplot(df, aes(y=reorder(BORO, BORO, function(y)+length(y)))) +
+  geom_bar(fill="steelblue") +
+  geom_label(aes(label=..count..), stat="count") +
+  ylab("Boro") +
+  xlab("Count of Incidents by Boro") +
+  theme_bw()
+```
+
+#### We can see from the bar chart above that according to the data, Brooklyn had the most incidents, followed by the Bronx and Queens.  
+
+
+```{r}
+# Add in YEAR and HOUR fields to extract data from OCCUR_DATE and OCCUR_TIME
+data_with_year = df %>%
+  mutate(YEAR = year(OCCUR_DATE), HOUR = hour(OCCUR_TIME))
+```
+
+
+```{r, include=FALSE, echo=FALSE}
+data_with_year %>%
+  group_by(YEAR) %>%
+  summarize(MURDERS = sum(STATISTICAL_MURDER_FLAG==TRUE), INCIDENT_COUNT = n()) %>%
+  ggplot(aes(x=YEAR, y=INCIDENT_COUNT)) +
+  geom_point() +
+  geom_label(aes(label=INCIDENT_COUNT), vjust=0, nudge_y=0.05) +
+  ylab("Total Incidents") +
+  theme_bw()
+```
+<center><h2> Total Incidents vs Total Murders by Year </h2></center>
+
+
+```{r, echo=TRUE}
+data_with_year %>%
+  group_by(YEAR) %>%
+  summarize(MURDERS = sum(STATISTICAL_MURDER_FLAG==TRUE), INCIDENT_COUNT = n()) %>%
+  ggplot() +
+  geom_bar(aes(x=YEAR, y=INCIDENT_COUNT, fill="Incident Count"), stat="identity") + 
+  geom_label(aes(x=YEAR, y=INCIDENT_COUNT, label=INCIDENT_COUNT), vjust=0, nudge_y=0.05) +
+  geom_bar(aes(x=YEAR, y=MURDERS, fill="Murders"), stat="identity") +
+  geom_label(aes(x=YEAR, y=MURDERS, label=MURDERS), vjust=0, nudge_y=0.5) +
+  ylab("Total Incidents vs Total Murders by Year") +
+  theme(legend.position="bottom") +
+  theme_bw()
+```
+
+#### The above bar graph shows total number of incidents grouped by year in blue and total murders by year in red. We can clearly see that there was a steady decline from 2011 to 2019 before sharply jumping back up in 2020.  
+
+---
+
+
+#### After seeing the spike in shootings in 2020, I decided to read in the COVID-19 confirmed_us.csv file from the Johns Hopkins GitHub site to compare the date and see if there was a correlation between shootings and COVID cases in New York in 2020. 
+
+
+```{r, message=FALSE}
+confirmed_us = read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+confirmed_us = confirmed_us %>%
+  pivot_longer(cols=-c(UID:Combined_Key),
+               names_to = "Date",
+               values_to = "Cases") %>%
+  select(-c(UID:FIPS, Lat, Long_)) %>%
+  # convert Date to date type
+  mutate(Date = mdy(Date))
+```
+
+#### After reading in the confirmed_us csv with all cases, I filtered down to New York and 2020:  
+
+```{r, message=FALSE}
+ny_2020 = confirmed_us %>%
+  group_by(Province_State, Country_Region, Date) %>%
+  summarize(Cases = sum(Cases)) %>%
+  select(Province_State, Country_Region, Date, Cases) %>%
+  filter(Province_State=="New York") %>%
+  filter(year(Date)==2020) %>%
+  ungroup()
+```
+
+
+#### I then filtered down to 2020 on the NY Shooting Incident data
+
+```{r}
+shootings_2020 = data_with_year %>%
+  filter(YEAR==2020) %>%
+  group_by(OCCUR_DATE) %>%
+  summarize(INCIDENT_COUNT = n()) %>%
+  mutate(Province_State = "New York") %>%
+  rename(Date = OCCUR_DATE) %>%
+  arrange(Date)
+
+```
+
+#### Breaking it down by month and summarizing the cases and shootings made the graph easier to visualize  
+
+
+```{r}
+ny_covid_by_month = ny_2020 %>%
+  group_by(Month = month(Date)) %>%
+  summarise(Cases = sum(Cases))
+```
+
+```{r}
+shootings_by_month = shootings_2020 %>%
+  group_by(Month = month(Date)) %>%
+  summarize(Shootings = sum(INCIDENT_COUNT))
+```
+
+```{r}
+month_join = left_join(shootings_by_month, ny_covid_by_month, by="Month")
+```
+
+```{r, message=FALSE}
+month_join %>%
+  ggplot(aes(x=factor(Month), y=Cases/1000, group=1)) +
+  geom_line(aes(color="COVID Cases")) +
+  geom_point(aes(color="COVID Cases")) +
+  geom_line(aes(y=Shootings, color="Shootings")) +
+  geom_point(aes(y=Shootings, color="Shootings")) +
+  scale_y_log10() +
+  theme(legend.position="bottom") +
+  theme_bw() +
+  scale_x_discrete(labels=month.abb) +
+  labs(y="COVID Cases * 1,000", x="Month", title="New York 2020 Shootings vs COVID Cases by Month", y=NULL)
+```
+
+
+  
+
+<center><h2> Number of Shooting Incidents Grouped by Hour of the Day </h2></center>  
+```{r, echo=TRUE}
+data_with_year %>%
+  group_by(HOUR) %>%
+  summarise(INCIDENT_COUNT = n()) %>%
+  ggplot(aes(x=HOUR, y=INCIDENT_COUNT)) +
+  geom_line() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+#  geom_label(aes(label=INCIDENT_COUNT), vjust=0, nudge_y=0.05) +
+  ylab("Total Incidents") +
+  theme_bw()
+```
+
+#### The above chart is a simple line graph but is a good way to visualize what times during the day had the most occurrences. It's no surprise that most occurred between 7:00 pm and 4:00 am.  
+
+
+<center><h2> Count of Perpetrators by Race </h2></center>
+
+```{r, echo=TRUE}
+df %>%
+  ggplot(aes(y=reorder(PERP_RACE, PERP_RACE, function(y)+length(y)))) +
+  geom_bar(aes(fill=PERP_RACE), show.legend=FALSE) +
+  geom_label(aes(label=..count..), stat="count") +
+  ylab("Perpetrator Race") +
+  theme_bw()
+```
+
+#### The next logical step for me was to take a look at the counts of perpetrators by race.  This lead me to another question, what percentage of shootings occurred with the perpetrator and victim being of the same race?  
+
+<center><h2> Count of True vs False for Perp and Victim of the Same Race </h2></center>
+```{r, echo=TRUE}
+compare_races = df
+compare_races['SAME_RACE?'] = (compare_races$PERP_RACE == compare_races$VIC_RACE)
+
+ggplot(data=subset(compare_races, !is.na(`SAME_RACE?`)), aes(x=`SAME_RACE?`)) +
+geom_bar(fill="steelblue") +
+geom_label(aes(label=..count..), stat="count") +
+ylab("Perp and Victim of Same Race") +
+theme_bw()
+```
+
+```{r, echo=TRUE}
+true_percent = sum(compare_races$`SAME_RACE?`==TRUE, na.rm=TRUE) / sum(!is.na(compare_races$`SAME_RACE?`))
+false_percent = sum(compare_races$`SAME_RACE?`==FALSE, na.rm=TRUE) / sum(!is.na(compare_races$`SAME_RACE?`))
+print(paste("Percentage of shootings involving the same race: ", true_percent))
+print(paste("Percentage of mixed races: ", false_percent))
+```
+
+#### In the bar chart above, from the available data (removed NA's), we see that over 9000 incidents involved the perp and victim being of the same race. This is roughly 60% of cases where both the perp's and victim's race was identified. So almost 40% of the time, the races were different.  
+
+<center><h2> Summary of Analysis </h2></center>
+
+<p> The above is some quick analysis to see what is going on within the data set which can raise other questions and lead to further analysis. I found the counts of incidents by year to be interesting and wondered why the cases spiked up in 2020. Some other factors would need to be introduced to model against. Did population gain have anything to do with it? Was it COVID related? We could probably compare number of incidents with cases of COVID, then break it down by borough. Cluster analysis would be helpful as well, since we are provided with latitude and longitude points. Plotting those on a map would tell us where the greatest density of incidents have occurred. It all depends on the questions we want to answer with the data. Are we focused on age groups, sex or race of victims versus perpetrators? Maybe we want to group it by seasons to see if weather has correlation to the number of shootings. Different perspectives will also introduce different biases toward the data. I chose to focus on race of perpetrators and then find out if the incidents involved victims and perpetrators of the same race and what the percentages were. Focusing on race could be a form of bias so it all depends on the questions we want to answer. Looking at it from different angles could help mitigate certain biases but there will always be some sort of bias when analyzing the data. </p>
+
+
+<center><h2> Session Info </h2></center>
+```{r}
+sessionInfo()
+```
+
+
+
+
